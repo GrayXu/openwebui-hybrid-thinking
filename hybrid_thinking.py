@@ -3,8 +3,8 @@ title: Hybrid Thinking
 description: You can use DeepSeek R1 or QwQ 32B for cheap and fast thinking, and use stronger and more expensive models like Claude 3.7 Sonnet for final summarization output, to achieve a better balance between inference cost and performance.
 author: GrayXu
 author_url: https://github.com/GrayXu
-funding_url: https://github.com/GrayXu/openwebui-hybrid-thinking-func
-version: 0.1.1
+funding_url: https://github.com/GrayXu/openwebui-hybrid-thinking
+version: 0.1.2
 """
 
 from pydantic import BaseModel, Field
@@ -55,12 +55,11 @@ class Filter:
             self.thinking_content = self._get_thinking_content(messages)
         
         if self.thinking_content:
-            # Inject thinking content by role
             new_message = {
-                "role": 'system',
+                "role": 'assistant',
                 "content": f"<think>\n\"{self.thinking_content}\"</think>"  # from DeepClaude
             }
-            messages.insert(0, new_message)
+            messages.append(new_message)
             
             body["messages"] = messages  # Update message list
         
