@@ -4,7 +4,7 @@ author: GrayXu
 description: You can use DeepSeek R1 or QwQ 32B for cheap and fast thinking, and use stronger and more expensive models like Claude 3.7 Sonnet for final summarization output, to achieve a better balance between inference cost and performance.
 author_url: https://github.com/GrayXu
 funding_url: https://github.com/GrayXu/openwebui-hybrid-thinking
-version: 0.1.1
+version: 0.2.0
 """
 
 import json
@@ -124,10 +124,8 @@ class Pipe:
             **{k: v for k, v in body.items() if k not in ["model", "messages"]},  # other params
         }
         
-        # add a think start tag
-        async for chunk in self._emit("<think>\n"):
-            yield chunk
-
+        think_tag = False
+        
         async for data in openai_api_call(
             payload=parameters,
             API_URL=self.valves.THINKING_API_URL,
@@ -141,17 +139,44 @@ class Pipe:
             choice = data.get("choices", [{}])[0]
             delta = choice.get("delta", {})
 
+            # DeepSeek style thinking
             if content := delta.get("reasoning_content"):
+                if not think_tag:
+                    async for chunk in self._emit("<think>\n"):
+                        yield chunk
+                    think_tag = True
+                    
                 async for chunk in self._emit(content):
                     thinking_content += chunk
                     yield chunk
+            # Tag style
+            elif content := delta.get("content"):
+                if "<think>" in content:
+                    think_tag = True
+                if think_tag:
+                    async for chunk in self._emit(content):
+                        thinking_content += chunk
+                        yield chunk
+                if "</think>" in content:
+                    think_tag = False
+            
             # if choice.get("finish_reason","") == "stop":
             #     break
 
-        # as a new assistant message
-        messages = body.get("messages", []) + [
-            {"role": "assistant", "content": "<think>" + thinking_content + "</think>"}  # from DeepClaude
-        ]
+        # add a think end tag
+        if think_tag:
+            async for chunk in self._emit("</think>"):
+                yield chunk
+        
+        print('-'*20)
+        print(thinking_content)
+        print('-'*20)
+        
+        # as a new assistant message (from DeepClaude)
+        messages = body.get("messages", []) + [{
+            "role": "assistant",
+            "content": thinking_content if think_tag else "<think>" + thinking_content + "</think>"
+        }]
         # append to the last message
         # body.get("messages")[-1]["content"] = body.get("messages")[-1]["content"] + "\n<think>" + deepseek_response + "\n</think>"
         # claude_messages = body.get("messages")
@@ -162,10 +187,7 @@ class Pipe:
             **{k: v for k, v in body.items() if k not in ["model", "messages"]},  # other params
         }
         
-        # add a think end tag
-        async for chunk in self._emit("</think>"):
-            yield chunk
-
+        # output model
         async for data in openai_api_call(
             payload=parameters,
             API_URL=self.valves.OUTPUT_API_URL,
