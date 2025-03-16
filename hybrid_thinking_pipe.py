@@ -4,7 +4,7 @@ author: GrayXu
 description: You can use DeepSeek R1 or QwQ 32B for cheap and fast thinking, and use stronger and more expensive models like Claude 3.7 Sonnet for final summarization output, to achieve a better balance between inference cost and performance.
 author_url: https://github.com/GrayXu
 funding_url: https://github.com/GrayXu/openwebui-hybrid-thinking
-version: 0.1.0
+version: 0.1.1
 """
 
 import json
@@ -111,7 +111,18 @@ class Pipe:
 
         thinking_model = self.valves.THINKING_MODEL
         thinking_content = ""
-        parameters = {**body, "model": thinking_model}
+
+        guiding_prompt = {
+            "role": "user",  # DeepSeek R1's official documentation recommends using "user".
+            "content": "You are a helpful AI assistant who excels at reasoning and responds in Markdown format. For code snippets, you wrap them in Markdown codeblocks with it's language specified."  # from DeepClaude
+        }
+        messages = body.get("messages", [])
+        messages.insert(0, guiding_prompt)
+        parameters = {
+            "model": thinking_model,
+            "messages": messages,
+            **{k: v for k, v in body.items() if k not in ["model", "messages"]},  # other params
+        }
         
         # add a think start tag
         async for chunk in self._emit("<think>\n"):
@@ -139,7 +150,7 @@ class Pipe:
 
         # as a new assistant message
         messages = body.get("messages", []) + [
-            {"role": "assistant", "content": "<think>" + thinking_content + "</think>"}
+            {"role": "assistant", "content": "<think>" + thinking_content + "</think>"}  # from DeepClaude
         ]
         # append to the last message
         # body.get("messages")[-1]["content"] = body.get("messages")[-1]["content"] + "\n<think>" + deepseek_response + "\n</think>"
