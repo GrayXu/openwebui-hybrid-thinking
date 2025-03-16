@@ -28,6 +28,14 @@ class Filter:
             default="deepseek-r1",
             description="thinking model name"
         )
+        REASONING_CONTENT_AS_CONTEXT: bool = Field(
+            default=True,
+            description="use reasoning content as context"
+        )
+        CONTENT_AS_CONTEXT: bool = Field(
+            default=False,
+            description="use normal content as context"
+        )
 
     def __init__(self):
         self.valves = self.Valves()
@@ -43,7 +51,9 @@ class Filter:
         messages = [msg.copy() for msg in body.get("messages", [])]
         
         # Call the thinking model to get reasoning content
-        self.thinking_content = self._get_thinking_content(messages)
+        if self.valves.REASONING_CONTENT_AS_CONTEXT or self.valves.CONTENT_AS_CONTEXT:
+            self.thinking_content = self._get_thinking_content(messages)
+        
         if self.thinking_content:
             # Inject thinking content by role
             new_message = {
@@ -89,10 +99,18 @@ class Filter:
         
         message = data["choices"][0].get("message", {})
         
-        if 'reasoning_content' in message:  # deepseek style
-            return message.get("reasoning_content")
-        else:  # default style
-            return message.get("content", "").replace("<think>", "").replace("</think>", "")
+        thinking_content = ""
+        
+        if self.valves.REASONING_CONTENT_AS_CONTEXT:
+            if 'reasoning_content' in message:  # deepseek style
+                thinking_content += message.get("reasoning_content")
+            else:  # default style
+                thinking_content += message.get("content", "").split("<think>")[1].split("</think>")[0]
+
+        if self.valves.CONTENT_AS_CONTEXT:
+            thinking_content += message.get("content", "").split("</think>")[1]
+        
+        return thinking_content
     
     # def outlet(self, body: dict, __user__: Optional[dict] = None) -> dict:
     #     body['messages'][-1]['content'] = "<think>" + self.thinking_content + "</think>\n" + body['messages'][-1]['content']
