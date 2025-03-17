@@ -4,7 +4,7 @@ author: GrayXu
 description: You can use DeepSeek R1 or QwQ 32B for cheap and fast thinking, and use stronger and more expensive models like Claude 3.7 Sonnet for final summarization output, to achieve a better balance between inference cost and performance.
 author_url: https://github.com/GrayXu
 funding_url: https://github.com/GrayXu/openwebui-hybrid-thinking
-version: 0.2.0
+version: 0.2.1
 """
 
 import json
@@ -42,20 +42,21 @@ async def openai_api_call(
                 yield {"error": format_error(response.status_code, error)}
                 return
             async for line in response.aiter_lines():
-                if not line.startswith(DATA_PREFIX):
-                    continue
-                json_str = line[len(DATA_PREFIX):]
-                try:
-                    data = json.loads(json_str)
-                    choices = data.get("choices", [{}])
-                    if choices and choices[0].get("finish_reason", "") == "stop":  # early stop
-                        yield {"choices": [{"delta": {'content': '', 'reasoning_content': ''}, "finish_reason": "stop"}]}
+                if line.startswith(DATA_PREFIX):
+                    json_str = line[len(DATA_PREFIX):]
+                    try:
+                        data = json.loads(json_str)
+                        choices = data.get("choices", [])
+                        if len(choices) == 0:
+                            continue
+                        if choices[0].get("finish_reason", "") == "stop":  # early stop
+                            yield {"choices": [{"delta": {'content': '', 'reasoning_content': ''}, "finish_reason": "stop"}]}
+                            return
+                    except json.JSONDecodeError as e:
+                        error_detail = f"ERROR - Content：{json_str}，Reason：{e}"
+                        yield {"error": format_error("JSONDecodeError", error_detail)}
                         return
-                except json.JSONDecodeError as e:
-                    error_detail = f"ERROR - Content：{json_str}，Reason：{e}"
-                    yield {"error": format_error("JSONDecodeError", error_detail)}
-                    return
-                yield data
+                    yield data
 
 
 class Pipe:
@@ -159,18 +160,13 @@ class Pipe:
                         yield chunk
                 if "</think>" in content:
                     think_tag = False
-            
-            # if choice.get("finish_reason","") == "stop":
-            #     break
+            if choice.get("finish_reason","") == "stop":
+                break
 
         # add a think end tag
         if think_tag:
             async for chunk in self._emit("</think>"):
                 yield chunk
-        
-        print('-'*20)
-        print(thinking_content)
-        print('-'*20)
         
         # as a new assistant message (from DeepClaude)
         messages = body.get("messages", []) + [{
@@ -204,5 +200,6 @@ class Pipe:
             if content := delta.get("content"):
                 async for chunk in self._emit(content):
                     yield chunk
-            # if choice.get("finish_reason","") == "stop":
-            #     break
+                    
+            if choice.get("finish_reason","") == "stop":
+                return
