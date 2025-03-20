@@ -4,7 +4,7 @@ author: GrayXu
 description: You can use DeepSeek R1 or QwQ 32B for cheap and fast thinking, and use stronger and more expensive models like Claude 3.7 Sonnet for final summarization output, to achieve a better balance between inference cost and performance.
 author_url: https://github.com/GrayXu
 funding_url: https://github.com/GrayXu/openwebui-hybrid-thinking
-version: 0.2.2
+version: 0.3.0
 """
 
 import json
@@ -85,11 +85,22 @@ class Pipe:
             default="claude-3-5-sonnet-latest",
             description="output model name",
         )
+        REASONING_CONTENT_AS_CONTEXT: bool = Field(
+            default=True,
+            description="use reasoning content as context"
+        )
+        CONTENT_AS_CONTEXT: bool = Field(
+            default=False,
+            description="use normal content as context"
+        )
 
     def __init__(self):
         self.valves = self.Valves()
         self.data_prefix = DATA_PREFIX
         self.emitter = None
+        self.thinking_content = ""
+        self.output_content = ""
+        self.think_flag = False
 
     def pipes(self):
         return [{"id": "Hybrid Thinking", "name": "Hybrid Thinking"}]
@@ -98,7 +109,48 @@ class Pipe:
         while content:
             yield content[0]
             content = content[1:]
+    
+    async def think_data_handler(self, data) -> AsyncGenerator[str, None]:
+        if "error" in data:
+            async for chunk in self._emit(data["error"]):
+                yield chunk
+            return
 
+        choice = data.get("choices", [{}])[0]
+        delta = choice.get("delta", {})
+        finish_reason = choice.get("finish_reason", "")
+
+        # DeepSeek style thinking
+        if content := delta.get("reasoning_content"):
+            if not self.think_flag:
+                self.thinking_content += "<think>\n"
+                self.think_flag = True
+                yield "<think>\n"
+            self.thinking_content += content
+            yield content
+        
+        # Tag style thinking
+        elif content := delta.get("content"):
+            if "<think>" in content:
+                self.think_flag = True
+            if "</think>" in content:
+                content = content.replace("</think>", "") # rm think end tag
+                self.thinking_content += content
+                self.think_flag = False
+            if self.think_flag:
+                self.thinking_content += content
+                yield content
+            else:  # data content
+                if self.valves.CONTENT_AS_CONTEXT:
+                    self.output_content += content
+                    yield content
+                else:
+                    yield None  # early quit
+                return
+        # stop
+        if finish_reason == "stop":
+            yield None
+    
     async def pipe(
         self,
         body: dict,
@@ -109,10 +161,8 @@ class Pipe:
         if not self.valves.THINKING_API_KEY:
             yield json.dumps({"error": "Missing api key"}, ensure_ascii=False)
             return
-
+        ###################  thinking  ##################
         thinking_model = self.valves.THINKING_MODEL
-        thinking_content = ""
-        output_content = ""
 
         guiding_prompt = {
             "role": "user",  # DeepSeek R1's official documentation recommends using "user".
@@ -126,59 +176,42 @@ class Pipe:
             **{k: v for k, v in body.items() if k not in ["model", "messages"]},  # other params
         }
 
-        think_tag = False
-        
+        self.thinking_content = ""
+        self.output_content = ""
+        self.think_flag = False
         # thinking model
         async for data in openai_api_call(
             payload=parameters,
             API_URL=self.valves.THINKING_API_URL,
             api_key=self.valves.THINKING_API_KEY,
         ):
-            if "error" in data:
-                async for chunk in self._emit(data["error"]):
-                    yield chunk
-                return
-
-            choice = data.get("choices", [{}])[0]
-            delta = choice.get("delta", {})
-
-            # DeepSeek style thinking
-            if content := delta.get("reasoning_content"):
-                if not think_tag:
-                    async for chunk in self._emit("<think>\n"):
-                        yield chunk
-                    think_tag = True
-                async for chunk in self._emit(content):
-                    thinking_content += chunk
-                    yield chunk
-            # Tag style
-            elif content := delta.get("content"):
-                if "<think>" in content:
-                    think_tag = True
-                if "</think>" in content:
-                    think_tag = False
-                if think_tag:
-                    async for chunk in self._emit(content):
-                        thinking_content += chunk
-                        yield chunk
-                else:
-                    break  # early stop
-            if choice.get("finish_reason","") == "stop":
-                break
-            
-        # add a think end tag
-        if think_tag:
-            async for chunk in self._emit("</think>"):
+            async for chunk in self.think_data_handler(data):
+                if chunk is None:
+                    break
                 yield chunk
+            
+        # output think end tag
+        async for chunk in self._emit("</think>"):
+            yield chunk
+
+        # context
+        context = (
+            ("<think>\n" if self.valves.CONTENT_AS_CONTEXT and not self.valves.REASONING_CONTENT_AS_CONTEXT else "")
+            + (self.thinking_content if self.valves.REASONING_CONTENT_AS_CONTEXT else "")
+            + (self.output_content if self.valves.CONTENT_AS_CONTEXT else "")
+            + "</think>"
+        )
         
+        print('self.thinking_content', self.thinking_content)
+        print('self.output_content', self.output_content)
+        print('context', context)
+        
+        ###################  output  ##################
         # as a new assistant message (from DeepClaude)
         messages = body.get("messages", []) + [{
             "role": "assistant",
-            "content": thinking_content if think_tag else "<think>" + thinking_content + "</think>"
+            "content": context
         }]
-        # append to the last message
-        # body.get("messages")[-1]["content"] = body.get("messages")[-1]["content"] + "\n<think>" + deepseek_response + "\n</think>"
-        # claude_messages = body.get("messages")
         
         parameters = {
             "model": self.valves.OUTPUT_MODEL,
