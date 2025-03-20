@@ -4,7 +4,7 @@ author: GrayXu
 description: You can use DeepSeek R1 or QwQ 32B for cheap and fast thinking, and use stronger and more expensive models like Claude 3.7 Sonnet for final summarization output, to achieve a better balance between inference cost and performance.
 author_url: https://github.com/GrayXu
 funding_url: https://github.com/GrayXu/openwebui-hybrid-thinking
-version: 0.2.1
+version: 0.2.2
 """
 
 import json
@@ -112,6 +112,7 @@ class Pipe:
 
         thinking_model = self.valves.THINKING_MODEL
         thinking_content = ""
+        output_content = ""
 
         guiding_prompt = {
             "role": "user",  # DeepSeek R1's official documentation recommends using "user".
@@ -124,9 +125,10 @@ class Pipe:
             "messages": messages,
             **{k: v for k, v in body.items() if k not in ["model", "messages"]},  # other params
         }
-        
+
         think_tag = False
         
+        # thinking model
         async for data in openai_api_call(
             payload=parameters,
             API_URL=self.valves.THINKING_API_URL,
@@ -146,7 +148,6 @@ class Pipe:
                     async for chunk in self._emit("<think>\n"):
                         yield chunk
                     think_tag = True
-                    
                 async for chunk in self._emit(content):
                     thinking_content += chunk
                     yield chunk
@@ -154,15 +155,17 @@ class Pipe:
             elif content := delta.get("content"):
                 if "<think>" in content:
                     think_tag = True
+                if "</think>" in content:
+                    think_tag = False
                 if think_tag:
                     async for chunk in self._emit(content):
                         thinking_content += chunk
                         yield chunk
-                if "</think>" in content:
-                    think_tag = False
+                else:
+                    break  # early stop
             if choice.get("finish_reason","") == "stop":
                 break
-
+            
         # add a think end tag
         if think_tag:
             async for chunk in self._emit("</think>"):
