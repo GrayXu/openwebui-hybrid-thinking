@@ -4,7 +4,7 @@ author: GrayXu
 description: You can use DeepSeek R1 or QwQ 32B for cheap and fast thinking, and use stronger and more expensive models like Claude 3.7 Sonnet for final summarization output, to achieve a better balance between inference cost and performance.
 author_url: https://github.com/GrayXu
 funding_url: https://github.com/GrayXu/openwebui-hybrid-thinking
-version: 0.3.0
+version: 0.3.1
 """
 
 import json
@@ -93,6 +93,10 @@ class Pipe:
             default=False,
             description="use normal content as context"
         )
+        GUIDING_PROMPT: str = Field(
+            default="You are a helpful AI assistant who excels at reasoning. For code snippets, you wrap them in Markdown codeblocks with it's language specified.", # from DeepClaude
+            description="guiding prompt (the lang you use may affect the lang of the output)"
+        )
 
     def __init__(self):
         self.valves = self.Valves()
@@ -146,7 +150,7 @@ class Pipe:
                     yield content
                 else:
                     yield None  # early quit
-                return
+                    return
         # stop
         if finish_reason == "stop":
             yield None
@@ -166,7 +170,7 @@ class Pipe:
 
         guiding_prompt = {
             "role": "user",  # DeepSeek R1's official documentation recommends using "user".
-            "content": "You are a helpful AI assistant who excels at reasoning and responds in Markdown format. For code snippets, you wrap them in Markdown codeblocks with it's language specified."  # from DeepClaude
+            "content": self.valves.GUIDING_PROMPT
         }
         messages = body.get("messages", [])
         messages.insert(0, guiding_prompt)
@@ -201,10 +205,6 @@ class Pipe:
             + (self.output_content if self.valves.CONTENT_AS_CONTEXT else "")
             + "</think>"
         )
-        
-        print('self.thinking_content', self.thinking_content)
-        print('self.output_content', self.output_content)
-        print('context', context)
         
         ###################  output  ##################
         # as a new assistant message (from DeepClaude)
